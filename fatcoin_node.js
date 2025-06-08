@@ -37,6 +37,7 @@ class FatCoinChain {
     this.chain = [];
     this.unconfirmedTransactions = [];
     this.nodes = new Set();
+    this.usernameRegistry = {}; // username -> ethereum address mapping
     this.createGenesisBlock();
   }
 
@@ -49,8 +50,39 @@ class FatCoinChain {
     return this.chain[this.chain.length - 1];
   }
 
+  registerNode(address) {
+    this.nodes.add(address);
+  }
+
+  registerUsername(username, ethAddress) {
+    if (this.usernameRegistry[username]) {
+      return false; // already taken
+    }
+    this.usernameRegistry[username] = ethAddress;
+    return true;
+  }
+
+  resolveAddress(address) {
+    if (address.endsWith('@ftc')) {
+      const username = address.split('@')[0];
+      return this.usernameRegistry[username] || null;
+    }
+    return address;
+  }
+
   addTransaction(transaction) {
-    this.unconfirmedTransactions.push(transaction);
+    const senderResolved = this.resolveAddress(transaction.sender);
+    const recipientResolved = this.resolveAddress(transaction.recipient);
+
+    if (!senderResolved || !recipientResolved) {
+      throw new Error('Invalid sender or recipient address');
+    }
+
+    this.unconfirmedTransactions.push({
+      sender: senderResolved,
+      recipient: recipientResolved,
+      amount: transaction.amount
+    });
   }
 
   proofOfWork(block) {
@@ -132,10 +164,6 @@ class FatCoinChain {
     }
     return false;
   }
-
-  registerNode(address) {
-    this.nodes.add(address);
-  }
 }
 
 const fatcoin = new FatCoinChain();
@@ -157,8 +185,12 @@ app.post('/transactions/new', (req, res) => {
     return res.status(400).json({ message: 'Missing transaction fields' });
   }
 
-  fatcoin.addTransaction({ sender, recipient, amount });
-  res.json({ message: 'Transaction added to mempool' });
+  try {
+    fatcoin.addTransaction({ sender, recipient, amount });
+    res.json({ message: 'Transaction added to mempool' });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
 });
 
 // Mine a block
@@ -194,6 +226,21 @@ app.get('/nodes/resolve', async (req, res) => {
   } else {
     res.json({ message: 'Our chain is authoritative', chain: fatcoin.chain });
   }
+});
+
+// Register username to Ethereum address
+app.post('/user/register', (req, res) => {
+  const { username, ethAddress } = req.body;
+  if (!username || !ethAddress) {
+    return res.status(400).json({ message: 'Missing username or Ethereum address' });
+  }
+
+  const success = fatcoin.registerUsername(username, ethAddress);
+  if (!success) {
+    return res.status(409).json({ message: 'Username already taken' });
+  }
+
+  res.json({ message: `Username ${username}@ftc registered to ${ethAddress}` });
 });
 
 app.listen(PORT, () => {
